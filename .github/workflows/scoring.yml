@@ -1,0 +1,30 @@
+name: Scoring CI
+
+on:
+  push:
+    paths:
+      - 'scoring/**'
+      - 'backend/contracts/**'
+      - '.github/workflows/scoring.yml'
+  pull_request:
+    paths:
+      - 'scoring/**'
+      - 'backend/contracts/**'
+      - '.github/workflows/scoring.yml'
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Scoring unit tests
+        working-directory: scoring
+        run: python -m unittest discover -s tests -v
+      - name: Validate scoring contract
+        run: |
+          python -m json.tool scoring/contracts/scoring.schema.json > /dev/null
+          cmp backend/contracts/scoring.schema.json scoring/contracts/scoring.schema.json

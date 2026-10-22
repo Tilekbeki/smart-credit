@@ -1,0 +1,7 @@
+:root { font-family: system-ui, sans-serif; color: #1c1b1f; background: #f6f6f8; }
+body { margin: 0; }
+main { max-width: 900px; margin: 10vh auto; padding: 24px; }
+.eyebrow { color: #ba143c; font-weight: 700; }
+h1 { font-size: clamp(2rem, 5vw, 3.5rem); line-height: 1.08; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-top: 40px; }
+section { padding: 24px; border-radius: 18px; background: white; box-shadow: 0 8px 30px #0000000d; }
