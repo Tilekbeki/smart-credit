@@ -8,7 +8,7 @@
 | `backend/` | [smart-credit-backend](https://github.com/Tilekbeki/smart-credit-backend) |
 | `scoring/` | [smart-credit-scoring](https://github.com/Tilekbeki/smart-credit-scoring) |
 
-Сейчас каждый сервис содержит стартовый каркас. Полный пользовательский сценарий и кредитная модель ещё не реализованы.
+Во `frontend` уже есть адаптивный лендинг и интерактивный демо-подбор продукта по цели финансирования. `backend` и `scoring` пока содержат стартовые каркасы. Полный сценарий подачи и обработки заявки ещё не реализован.
 
 ## Получить проект вместе с модулями
 
