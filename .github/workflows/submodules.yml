@@ -1,0 +1,33 @@
+name: Submodule pointers
+
+on:
+  push:
+    paths:
+      - '.gitmodules'
+      - 'frontend'
+      - 'backend'
+      - 'scoring'
+      - '.github/workflows/submodules.yml'
+  pull_request:
+    paths:
+      - '.gitmodules'
+      - 'frontend'
+      - 'backend'
+      - 'scoring'
+      - '.github/workflows/submodules.yml'
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check submodule URLs and pointers
+        run: |
+          set -eu
+          for module in frontend backend scoring; do
+            expected="https://github.com/Tilekbeki/smart-credit-${module}.git"
+            actual="$(git config -f .gitmodules --get "submodule.${module}.url")"
+            test "$actual" = "$expected"
+            git ls-tree HEAD "$module" | grep -Eq "^160000 commit [0-9a-f]{40}[[:space:]]+${module}$"
+          done

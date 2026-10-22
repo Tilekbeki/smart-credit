@@ -1,0 +1,12 @@
+[submodule "frontend"]
+	path = frontend
+	url = https://github.com/Tilekbeki/smart-credit-frontend.git
+	branch = main
+[submodule "backend"]
+	path = backend
+	url = https://github.com/Tilekbeki/smart-credit-backend.git
+	branch = main
+[submodule "scoring"]
+	path = scoring
+	url = https://github.com/Tilekbeki/smart-credit-scoring.git
+	branch = main
