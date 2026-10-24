@@ -1,20 +1,24 @@
 """Exercise the synthetic client journey through the public frontend proxy.
 
-Each run creates one new draft for the seeded Alfa client. It never accepts an
-offer or moves money, and it does not use personal or production data.
+Each run creates one new draft for each of two seeded clients. It never accepts
+an offer or moves money, and it does not use personal or production data.
 """
 
 import json
 import os
 import sys
 import time
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from uuid import uuid4
 
 
 BASE_URL = os.environ.get("SMART_CREDIT_URL", "http://127.0.0.1:8081").rstrip("/")
 OTP_CODE = os.environ.get("SMART_CREDIT_OTP_CODE", "1221")
-CLIENT_PHONE = "+79990000001"  # Seeded profile with a trusted synthetic bank feed.
+ALFA_CLIENT_PHONE = "+79990000001"  # Trusted synthetic bank feed.
+EXTERNAL_CLIENT_PHONE = "+79990000002"  # Requires BANK_STATEMENT.
+PDF_FIXTURE = Path(__file__).resolve().parent.parent / "backend/api/postman/fixtures/sample.pdf"
 FINAL_STATUSES = {"approved", "counter_offer", "rejected", "manual_review"}
 APPLICATION_INPUT = {
     "productId": "turnover",
@@ -23,6 +27,11 @@ APPLICATION_INPUT = {
     "termMonths": 12,
     "monthlyRevenueRub": 2_400_000,
     "monthlyExpensesRub": 1_500_000,
+}
+EXTERNAL_APPLICATION_INPUT = {
+    **APPLICATION_INPUT,
+    "monthlyRevenueRub": 4_200_000,
+    "monthlyExpensesRub": 2_800_000,
 }
 
 
@@ -56,9 +65,65 @@ def call(method, path, body=None, token=None, expected=200):
             details = json.load(error)
         except (ValueError, OSError):
             details = {}
+        if error.code == expected:
+            require(isinstance(details, dict), f"{method} {path}: ожидался JSON-объект ошибки")
+            return details
         code = details.get("error", "http_error") if isinstance(details, dict) else "http_error"
         message = details.get("message", "") if isinstance(details, dict) else ""
         raise SmokeError(f"{method} {path}: HTTP {error.code} {code}: {message}") from error
+
+
+def upload_statement(application_id, token):
+    """Upload the backend's small, explicitly synthetic PDF fixture as BANK_STATEMENT."""
+    try:
+        pdf = PDF_FIXTURE.read_bytes()
+    except OSError as error:
+        raise SmokeError("Синтетический PDF не найден; проверьте backend submodule") from error
+    require(pdf.startswith(b"%PDF-") and b"Synthetic fixture: no banking data" in pdf,
+            "Синтетический PDF fixture не найден или изменён")
+    boundary = f"smart-credit-smoke-{uuid4().hex}"
+    prefix = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="documentType"\r\n\r\n'
+        "BANK_STATEMENT\r\n"
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="file"; filename="synthetic-bank-statement.pdf"\r\n'
+        "Content-Type: application/pdf\r\n\r\n"
+    ).encode("ascii")
+    body = prefix + pdf + f"\r\n--{boundary}--\r\n".encode("ascii")
+    path = f"/api/v1/applications/{application_id}/documents"
+    request = Request(
+        BASE_URL + path, data=body, method="POST",
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {token}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+    )
+    try:
+        with urlopen(request, timeout=10) as response:
+            require(response.status == 201, f"POST {path}: HTTP {response.status}, ожидался 201")
+            document = json.load(response)
+    except HTTPError as error:
+        try:
+            details = json.load(error)
+        except (ValueError, OSError):
+            details = {}
+        code = details.get("error", "http_error") if isinstance(details, dict) else "http_error"
+        message = details.get("message", "") if isinstance(details, dict) else ""
+        raise SmokeError(f"POST {path}: HTTP {error.code} {code}: {message}") from error
+    require(isinstance(document, dict) and document.get("applicationId") == application_id,
+            "Загрузка выписки вернула другую заявку")
+    require(document.get("documentType") == "BANK_STATEMENT" and document.get("contentType") == "application/pdf",
+            "Загруженный файл не распознан как BANK_STATEMENT PDF")
+    document_id = document.get("documentId")
+    require(isinstance(document_id, str) and document_id, "Загрузка выписки не вернула documentId")
+    listing = call("GET", path, token=token)
+    items = listing.get("items")
+    require(isinstance(items, list) and any(item.get("documentId") == document_id for item in items),
+            "Выписка не отображается в сохранённых документах")
+    print("Синтетическая PDF-выписка загружена и доступна в кабинете")
+    return document_id
 
 
 def login(profile_id):
@@ -111,26 +176,35 @@ def appears_in_cabinet(application_id, token):
             return False
 
 
-def main():
-    poll_seconds = float(os.environ.get("SMART_CREDIT_POLL_SECONDS", "60"))
-    require(0 < poll_seconds <= 600, "SMART_CREDIT_POLL_SECONDS должен быть от 1 до 600")
-    profiles = call("GET", "/api/v1/demo/profiles").get("items")
-    require(isinstance(profiles, list), "Сервис не вернул тестовые профили")
-    clients = [profile for profile in profiles if profile.get("phone") == CLIENT_PHONE and profile.get("role") == "CLIENT"]
-    require(len(clients) == 1, "Не найден тестовый клиент с доверенным источником финансов")
-    profile = clients[0]
+def run_scenario(profile, draft_input, needs_statement, poll_seconds):
     token = login(profile["id"])
     user = call("GET", "/api/v1/me", token=token)
     require(user.get("id") == profile["id"], "Вход выполнен под другим профилем")
-    print(f"Вход: {profile['companyName']} (синтетический профиль)")
+    print(f"\nВход: {profile['companyName']} (синтетический профиль)")
 
-    draft = call("POST", "/api/v1/applications", APPLICATION_INPUT, token, expected=201)
+    draft = call("POST", "/api/v1/applications", draft_input, token, expected=201)
     application_id = draft.get("applicationId")
     require(isinstance(application_id, str) and application_id, "Создание черновика не вернуло applicationId")
     require(draft.get("status") == "draft", "Новая заявка должна быть черновиком")
     print(f"Черновик: {application_id}")
 
-    submitted = call("POST", f"/api/v1/applications/{application_id}/submit", token=token, expected=202)
+    submit_path = f"/api/v1/applications/{application_id}/submit"
+    document_id = None
+    if needs_statement:
+        validation = call("POST", submit_path, token=token, expected=422)
+        details = validation.get("details")
+        require(validation.get("error") == "validation_failed" and isinstance(details, list),
+                "Отправка без выписки не вернула ожидаемую ошибку валидации")
+        require(any(isinstance(item, dict) and item.get("field") == "documents.BANK_STATEMENT"
+                    and item.get("code") == "required_document_missing" for item in details),
+                "Backend не потребовал BANK_STATEMENT для внешнего клиента")
+        unchanged = call("GET", f"/api/v1/applications/{application_id}", token=token)
+        require(unchanged.get("status") == "draft" and unchanged.get("version") == draft.get("version"),
+                "Неуспешная отправка изменила черновик")
+        print("Отправка без выписки: ожидаемая ошибка 422, черновик сохранён")
+        document_id = upload_statement(application_id, token)
+
+    submitted = call("POST", submit_path, token=token, expected=202)
     require(submitted.get("applicationId") == application_id, "Submit вернул другую заявку")
     require(submitted.get("status") in {"submitted", "processing"}, "Submit не запустил обработку")
     print("Отправка: принята backend")
@@ -139,7 +213,9 @@ def main():
     score = decision.get("score")
     require(isinstance(score, int) and not isinstance(score, bool) and 0 <= score <= 100,
             "Итоговое состояние не содержит оценку скоринга")
-    if decision["status"] != "manual_review":
+    if decision["status"] == "manual_review":
+        require(decision.get("decision") is None, "Ручная проверка не должна показывать финальное решение")
+    else:
         require(decision.get("decision") == decision["status"], "Тип решения не соответствует статусу")
     timeline = call("GET", f"/api/v1/applications/{application_id}/timeline", token=token)
     events = timeline.get("items")
@@ -158,8 +234,28 @@ def main():
     require(restored_decision.get("score") == score and restored_decision.get("status") == decision["status"],
             "Повторный вход не восстановил решение")
     require(appears_in_cabinet(application_id, token), "Заявка не отображается в списке кабинета")
+    if document_id:
+        documents = call("GET", f"/api/v1/applications/{application_id}/documents", token=token).get("items")
+        require(isinstance(documents, list) and any(isinstance(item, dict) and item.get("documentId") == document_id
+                                                    for item in documents),
+                "Повторный вход не восстановил выписку")
     print("Повторный вход: заявка и решение сохранены и доступны в кабинете")
-    print("Сквозной сценарий frontend proxy → Go backend → Python scoring пройден.")
+
+
+def main():
+    poll_seconds = float(os.environ.get("SMART_CREDIT_POLL_SECONDS", "60"))
+    require(0 < poll_seconds <= 600, "SMART_CREDIT_POLL_SECONDS должен быть от 1 до 600")
+    profiles = call("GET", "/api/v1/demo/profiles").get("items")
+    require(isinstance(profiles, list), "Сервис не вернул тестовые профили")
+    for phone, draft_input, needs_statement in (
+        (ALFA_CLIENT_PHONE, APPLICATION_INPUT, False),
+        (EXTERNAL_CLIENT_PHONE, EXTERNAL_APPLICATION_INPUT, True),
+    ):
+        clients = [profile for profile in profiles if isinstance(profile, dict)
+                   and profile.get("phone") == phone and profile.get("role") == "CLIENT"]
+        require(len(clients) == 1, f"Не найден синтетический CLIENT с номером {phone}")
+        run_scenario(clients[0], draft_input, needs_statement, poll_seconds)
+    print("\nОба сквозных сценария frontend proxy → Go backend → Python scoring пройдены.")
 
 
 if __name__ == "__main__":
