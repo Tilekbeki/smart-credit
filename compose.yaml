@@ -1,48 +1,102 @@
+name: smart-credit-stack
+
 services:
   frontend:
     build:
       context: .
       dockerfile: Dockerfile.frontend
     ports:
-      - "127.0.0.1:8080:80"
+      - "127.0.0.1:${FRONTEND_PORT:-8081}:80"
     depends_on:
       backend:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
 
   backend:
     build:
-      context: .
-      dockerfile: Dockerfile.backend
+      context: ./backend
     environment:
-      HOST: 0.0.0.0
-      PORT: "8000"
-      DB_PATH: /data/applications.sqlite3
+      APP_ENV: demo
+      HTTP_HOST: 0.0.0.0
+      HTTP_PORT: "8080"
+      DATABASE_URL: &database_url postgres://${POSTGRES_USER:-smart_credit}:${POSTGRES_PASSWORD:-smart-credit-demo-local-only}@postgres:5432/${POSTGRES_DB:-smart_credit}?sslmode=disable
+      DOCUMENT_STORAGE_PATH: /var/lib/smart-credit/documents
       SCORING_URL: http://scoring:8001
+      SCORING_TIMEOUT: ${SCORING_TIMEOUT:-5s}
+      JWT_SECRET: ${JWT_SECRET:-}
+      JWT_SECRET_FILE: /var/lib/smart-credit/secrets/jwt-secret
+      JWT_ISSUER: smart-credit-backend
+      JWT_AUDIENCE: smart-credit-frontend
+      DEMO_OTP_CODE: ${DEMO_OTP_CODE:-1221}
     volumes:
-      - backend_data:/data
+      - documents:/var/lib/smart-credit/documents
+      - jwt_secrets:/var/lib/smart-credit/secrets
     depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       scoring:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
-      interval: 5s
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/ready"]
+      interval: 10s
       timeout: 3s
-      retries: 12
-      start_period: 5s
+      retries: 3
+      start_period: 10s
+    stop_grace_period: 20s
 
   scoring:
     build:
-      context: .
-      dockerfile: Dockerfile.scoring
+      context: ./scoring
     environment:
       HOST: 0.0.0.0
       PORT: "8001"
+      SCORING_MODEL: logreg_v1
+    read_only: true
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=2)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=2).read()"]
       interval: 5s
       timeout: 3s
-      retries: 12
+      retries: 10
       start_period: 5s
 
+  postgres:
+    image: postgres:17.11-alpine3.24
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-smart_credit}
+      POSTGRES_USER: ${POSTGRES_USER:-smart_credit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-smart-credit-demo-local-only}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  migrate:
+    image: migrate/migrate:v4.20.1
+    restart: "no"
+    volumes:
+      - ./backend/migrations:/migrations:ro
+    entrypoint:
+      - migrate
+      - -path
+      - /migrations
+      - -database
+      - *database_url
+    command: ["up"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
-  backend_data:
+  postgres_data:
+  documents:
+  jwt_secrets:

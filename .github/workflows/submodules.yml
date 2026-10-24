@@ -1,4 +1,4 @@
-name: Submodule pointers
+name: Stack wiring
 
 on:
   push:
@@ -7,6 +7,10 @@ on:
       - 'frontend'
       - 'backend'
       - 'scoring'
+      - 'compose.yaml'
+      - 'Dockerfile.frontend'
+      - 'nginx.conf'
+      - '.dockerignore'
       - '.github/workflows/submodules.yml'
   pull_request:
     paths:
@@ -14,6 +18,10 @@ on:
       - 'frontend'
       - 'backend'
       - 'scoring'
+      - 'compose.yaml'
+      - 'Dockerfile.frontend'
+      - 'nginx.conf'
+      - '.dockerignore'
       - '.github/workflows/submodules.yml'
   workflow_dispatch:
 
@@ -31,3 +39,5 @@ jobs:
             test "$actual" = "$expected"
             git ls-tree HEAD "$module" | grep -Eq "^160000 commit [0-9a-f]{40}[[:space:]]+${module}$"
           done
+      - name: Validate Compose wiring
+        run: docker compose config --quiet
