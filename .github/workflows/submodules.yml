@@ -11,6 +11,7 @@ on:
       - 'Dockerfile.frontend'
       - 'nginx.conf'
       - '.dockerignore'
+      - 'scripts/smoke.py'
       - '.github/workflows/submodules.yml'
   pull_request:
     paths:
@@ -22,14 +23,19 @@ on:
       - 'Dockerfile.frontend'
       - 'nginx.conf'
       - '.dockerignore'
+      - 'scripts/smoke.py'
       - '.github/workflows/submodules.yml'
   workflow_dispatch:
 
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
       - name: Check submodule URLs and pointers
         run: |
           set -eu
@@ -41,3 +47,13 @@ jobs:
           done
       - name: Validate Compose wiring
         run: docker compose config --quiet
+      - name: Start integrated stack
+        run: docker compose up --build -d --wait --wait-timeout 300
+      - name: Exercise client, API and scoring
+        run: python3 scripts/smoke.py
+      - name: Show service logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail=100
+      - name: Stop integrated stack
+        if: always()
+        run: docker compose down -v
