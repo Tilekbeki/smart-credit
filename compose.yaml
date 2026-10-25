@@ -32,6 +32,7 @@ services:
       JWT_ISSUER: smart-credit-backend
       JWT_AUDIENCE: smart-credit-frontend
       DEMO_OTP_CODE: ${DEMO_OTP_CODE:-1221}
+      MAX_ACTIVE_DRAFTS_PER_CLIENT: ${MAX_ACTIVE_DRAFTS_PER_CLIENT:-20}
     volumes:
       - documents:/var/lib/smart-credit/documents
       - jwt_secrets:/var/lib/smart-credit/secrets
